@@ -3,6 +3,7 @@ import pandas as pd
 from io import StringIO
 import requests
 import yfinance as yf
+import json
 
 from analyzer import analyze_holdings, scan_trending_ideas, get_top_5_trades
 from wsb_sentiment import get_wsb_snapshot
@@ -19,16 +20,18 @@ body {background:#0b0f14;color:white;}
 .sell-box {background:linear-gradient(135deg,#3d0000,#ff1744);}
 .hold-box {background:linear-gradient(135deg,#3d3000,#ffd600);}
 .small {color:#aaa;font-size:13px;}
+.score {font-size:20px;font-weight:bold;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- HELPERS ----------
+# ---------- LOAD HOLDINGS ----------
 def load_holdings():
     file_id = st.secrets.get("holdings_file_id", "")
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
     r = requests.get(url)
     return pd.read_csv(StringIO(r.text))
 
+# ---------- STYLE ----------
 def style_box(decision):
     if "BUY" in decision:
         return "buy-box", "🟢 BUY"
@@ -36,85 +39,162 @@ def style_box(decision):
         return "sell-box", "🔴 SELL"
     return "hold-box", "🟡 HOLD"
 
-def get_candles(ticker):
+# ---------- WEIGHTS ----------
+def load_weights():
     try:
-        df = yf.download(ticker, period="3mo", progress=False)
-        return df
+        with open("weights.json", "r") as f:
+            return json.load(f)
     except:
-        return None
+        return {"confidence": 1.0, "momentum": 1.0, "breakout": 1.0}
 
-def trade_checklist(conf):
-    checks = [
-        ("Trend strength", conf > 70),
-        ("Momentum confirmed", conf > 60),
-        ("Risk defined", True),
-        ("Market aligned", conf > 65)
-    ]
-    return checks
+def save_weights(w):
+    with open("weights.json", "w") as f:
+        json.dump(w, f)
+
+# ---------- AI SCORE ----------
+def ai_score(conf, momentum, breakout, weights):
+    score = (
+        conf * weights["confidence"]
+        + (10 if momentum else 0) * weights["momentum"]
+        + (15 if breakout else 0) * weights["breakout"]
+    )
+    return min(100, round(score))
+
+def score_label(score):
+    if score > 85:
+        return "🔥 Strong"
+    if score > 70:
+        return "✅ Good"
+    if score > 60:
+        return "⚠️ Watch"
+    return "❌ Weak"
+
+# ---------- DATA ENGINE ----------
+@st.cache_data(ttl=120)
+def get_batch_data(tickers):
+    return yf.download(tickers, period="3mo", group_by="ticker", progress=False)
+
+# ---------- MOMENTUM ----------
+def get_momentum(data):
+    try:
+        move = (data["Close"].iloc[-1] - data["Close"].iloc[-4]) / data["Close"].iloc[-4] * 100
+        vol = data["Volume"].iloc[-1] > data["Volume"].mean() * 1.5
+        return abs(move) > 1 and vol
+    except:
+        return False
+
+# ---------- BREAKOUT ----------
+def get_breakout(data):
+    try:
+        high = data["High"].tail(10).max()
+        low = data["Low"].tail(10).min()
+        current = data["Close"].iloc[-1]
+        vol = data["Volume"].iloc[-1] > data["Volume"].mean() * 1.5
+        return (current >= high or current <= low) and vol
+    except:
+        return False
+
+# ---------- PERFORMANCE ----------
+def calculate_performance(df):
+    results = []
+
+    for _, row in df.iterrows():
+        try:
+            data = yf.download(row["ticker"], period="5d")
+            future_price = data["Close"].iloc[-1]
+            ret = (future_price - row["entry_price"]) / row["entry_price"] * 100
+
+            results.append({
+                "score": row["ai_score"],
+                "return": ret
+            })
+        except:
+            continue
+
+    return pd.DataFrame(results)
+
+# ---------- SELF LEARNING ----------
+def update_weights(perf_df):
+    weights = load_weights()
+
+    if len(perf_df) < 20:
+        return weights
+
+    high = perf_df[perf_df["score"] > 75]
+    low = perf_df[perf_df["score"] < 60]
+
+    if len(high) > 5:
+        if high["return"].mean() > 0:
+            weights["confidence"] *= 1.05
+        else:
+            weights["confidence"] *= 0.95
+
+    if len(low) > 5:
+        if low["return"].mean() < 0:
+            weights["momentum"] *= 1.05
+            weights["breakout"] *= 1.05
+
+    for k in weights:
+        weights[k] = max(0.5, min(2.0, weights[k]))
+
+    save_weights(weights)
+    return weights
 
 # ---------- LOAD ----------
 holdings = load_holdings()
 results = analyze_holdings(holdings)
 ideas = scan_trending_ideas(holdings, get_wsb_snapshot())
 top5 = get_top_5_trades(holdings, results, ideas)
+
+tickers = list(set(
+    [r["Ticker"] for r in top5] +
+    [r["Ticker"] for r in results["decisions"]]
+))
+
+market_data = get_batch_data(tickers)
+weights = load_weights()
+
 best = results["best_trade_right_now"]
 
 # ---------- SIDEBAR ----------
-st.sidebar.title("💰 Hedge Fund Mode")
+st.sidebar.title("📱 AI Trader V20")
 section = st.sidebar.radio(
     "Navigate",
-    ["🏠 Home", "🎯 Focus", "🔥 Trades", "📊 Risk", "💼 Portfolio", "📘 Journal"]
+    ["🏠 Home", "🔥 Trades", "💼 Portfolio", "📊 Performance"]
 )
 
 # ---------- HOME ----------
 if section == "🏠 Home":
+
+    data = market_data.get(best["Ticker"])
+    momentum = get_momentum(data)
+    breakout = get_breakout(data)
+    score = ai_score(best["Confidence"], momentum, breakout, weights)
+
     box, label = style_box(best["Decision"])
+
     st.markdown(f"""
     <div class="hero {box}">
     <h1>{best["Ticker"]}</h1>
     <h2>{label}</h2>
-    <h3>{best["Confidence"]}%</h3>
-    <p>{best["Action Price"]}</p>
+    <h3>AI Score: {score}</h3>
+    <p class="score">{score_label(score)}</p>
     </div>
     """, unsafe_allow_html=True)
 
-# ---------- FOCUS ----------
-if section == "🎯 Focus":
-
-    st.markdown("## 🎯 Trade Execution")
-
-    if best["Confidence"] >= 70:
-
-        box, label = style_box(best["Decision"])
-
-        st.markdown(f"""
-        <div class="hero {box}">
-        <h1>{best["Ticker"]}</h1>
-        <h2>{label}</h2>
-        <h3>{best["Confidence"]}%</h3>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Checklist
-        st.markdown("### ✔ Trade Checklist")
-        for name, ok in trade_checklist(best["Confidence"]):
-            st.write(f"{'✅' if ok else '❌'} {name}")
-
-        # Chart
-        data = get_candles(best["Ticker"])
-        if data is not None:
-            st.line_chart(data["Close"])
-
-    else:
-        st.info("No high-quality trade right now")
+    if data is not None:
+        st.line_chart(data["Close"])
 
 # ---------- TRADES ----------
 if section == "🔥 Trades":
 
     for r in top5:
 
-        if r["Confidence"] < 60:
-            continue
+        data = market_data.get(r["Ticker"])
+        momentum = get_momentum(data)
+        breakout = get_breakout(data)
+
+        score = ai_score(r["Confidence"], momentum, breakout, weights)
 
         box, label = style_box(r["Decision"])
 
@@ -122,42 +202,61 @@ if section == "🔥 Trades":
         <div class="card {box}">
         <h3>{r["Ticker"]}</h3>
         <h2>{label}</h2>
-        <p>{r["Confidence"]}%</p>
+        <p>AI Score: {score}</p>
+        <p class="score">{score_label(score)}</p>
         </div>
         """, unsafe_allow_html=True)
 
-# ---------- RISK DASHBOARD ----------
-if section == "📊 Risk":
-
-    st.markdown("## 📊 Portfolio Risk")
-
-    total_positions = len(results["decisions"])
-    high_risk = len([r for r in results["decisions"] if r["Decision"] == "SELL / CUT RISK"])
-
-    st.metric("Total Positions", total_positions)
-    st.metric("High Risk Positions", high_risk)
-
-    st.progress(min(1.0, high_risk / max(1, total_positions)))
+        if data is not None:
+            st.line_chart(data["Close"])
 
 # ---------- PORTFOLIO ----------
 if section == "💼 Portfolio":
 
     for row in results["decisions"]:
+
+        data = market_data.get(row["Ticker"])
+        momentum = get_momentum(data)
+        breakout = get_breakout(data)
+
+        score = ai_score(row["Confidence"], momentum, breakout, weights)
+
         box, label = style_box(row["Decision"])
 
         st.markdown(f"""
         <div class="card {box}">
         <h3>{row["Ticker"]}</h3>
         <h2>{label}</h2>
-        <p>{row["Confidence"]}%</p>
+        <p>AI Score: {score}</p>
+        <p class="score">{score_label(score)}</p>
         </div>
         """, unsafe_allow_html=True)
 
-# ---------- JOURNAL ----------
-if section == "📘 Journal":
+# ---------- PERFORMANCE ----------
+if section == "📊 Performance":
+
+    st.markdown("## 📊 AI Performance")
 
     try:
-        journal = pd.read_csv("trade_journal.csv").tail(20)
-        st.dataframe(journal)
+        journal = pd.read_csv("trade_journal.csv")
+        perf = calculate_performance(journal)
+
+        if len(perf) > 0:
+            win_rate = (perf["return"] > 0).mean() * 100
+            avg_return = perf["return"].mean()
+
+            st.metric("Win Rate", f"{round(win_rate,1)}%")
+            st.metric("Avg Return", f"{round(avg_return,2)}%")
+
+            st.line_chart(perf["return"])
+
+            weights = update_weights(perf)
+
+            st.markdown("### 🧠 AI Weights")
+            st.write(weights)
+
+        else:
+            st.info("Not enough data yet")
+
     except:
-        st.info("No journal yet")
+        st.info("Waiting for performance data")
