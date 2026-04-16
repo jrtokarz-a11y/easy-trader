@@ -7,6 +7,19 @@ import streamlit as st
 from analyzer import analyze_holdings, scan_trending_ideas
 from wsb_sentiment import get_wsb_snapshot
 
+st.sidebar.title("📱 Navigation")
+
+section = st.sidebar.radio(
+    "Go to:",
+    [
+        "🏠 Home",
+        "🔥 Top Trades",
+        "💼 Portfolio",
+        "📈 Opportunities",
+        "📘 Journal"
+    ]
+)
+
 def load_settings():
     settings = {}
     cfg = Path('config.json')
