@@ -96,6 +96,7 @@ if holdings is None:
 results = analyze_holdings(holdings)
 wsb_rows = get_wsb_snapshot()
 ideas = scan_trending_ideas(holdings, wsb_rows)
+top5 = get_top_5_trades(holdings, results, ideas)
 best = results['best_trade_right_now']
 
 st.markdown("<div class='hero-card'>", unsafe_allow_html=True)
