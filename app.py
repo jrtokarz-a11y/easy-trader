@@ -4,7 +4,7 @@ from io import StringIO
 import pandas as pd
 import requests
 import streamlit as st
-from analyzer import analyze_holdings, scan_trending_ideas
+from analyzer import analyze_holdings, scan_trending_ideas, get_top_5_trades
 from wsb_sentiment import get_wsb_snapshot
 
 st.sidebar.title("📱 Navigation")
