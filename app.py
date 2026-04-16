@@ -94,23 +94,63 @@ def get_breakout(data):
     except:
         return False
 
+# ---------- ENTRY / EXIT ENGINE ----------
+def get_trade_levels(data):
+    try:
+        recent = data.tail(20)
+
+        high = recent["High"].max()
+        low = recent["Low"].min()
+        current = recent["Close"].iloc[-1]
+
+        entry = round(current * 0.995, 2)
+        stop = round(low * 0.98, 2)
+        target = round(high * 1.03, 2)
+
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        rr = round(reward / risk, 2) if risk > 0 else 0
+
+        return {
+            "entry": entry,
+            "stop": stop,
+            "target": target,
+            "rr": rr
+        }
+
+    except:
+        return None
+
+def trade_box(levels):
+    if not levels:
+        return ""
+
+    return f"""
+    <div style="
+        background:#0f172a;
+        padding:10px;
+        border-radius:10px;
+        margin-top:8px;
+        font-size:14px;
+    ">
+    🎯 Entry: ${levels["entry"]} <br>
+    🛑 Stop: ${levels["stop"]} <br>
+    💰 Target: ${levels["target"]} <br>
+    ⚖️ R/R: {levels["rr"]}
+    </div>
+    """
+
 # ---------- PERFORMANCE ----------
 def calculate_performance(df):
     results = []
-
     for _, row in df.iterrows():
         try:
             data = yf.download(row["ticker"], period="5d")
             future_price = data["Close"].iloc[-1]
             ret = (future_price - row["entry_price"]) / row["entry_price"] * 100
-
-            results.append({
-                "score": row["ai_score"],
-                "return": ret
-            })
+            results.append({"score": row["ai_score"], "return": ret})
         except:
             continue
-
     return pd.DataFrame(results)
 
 # ---------- SELF LEARNING ----------
@@ -124,10 +164,7 @@ def update_weights(perf_df):
     low = perf_df[perf_df["score"] < 60]
 
     if len(high) > 5:
-        if high["return"].mean() > 0:
-            weights["confidence"] *= 1.05
-        else:
-            weights["confidence"] *= 0.95
+        weights["confidence"] *= 1.05 if high["return"].mean() > 0 else 0.95
 
     if len(low) > 5:
         if low["return"].mean() < 0:
@@ -157,7 +194,7 @@ weights = load_weights()
 best = results["best_trade_right_now"]
 
 # ---------- SIDEBAR ----------
-st.sidebar.title("📱 AI Trader V20")
+st.sidebar.title("📱 AI Trader V21")
 section = st.sidebar.radio(
     "Navigate",
     ["🏠 Home", "🔥 Trades", "💼 Portfolio", "📊 Performance"]
@@ -170,6 +207,7 @@ if section == "🏠 Home":
     momentum = get_momentum(data)
     breakout = get_breakout(data)
     score = ai_score(best["Confidence"], momentum, breakout, weights)
+    levels = get_trade_levels(data)
 
     box, label = style_box(best["Decision"])
 
@@ -179,6 +217,7 @@ if section == "🏠 Home":
     <h2>{label}</h2>
     <h3>AI Score: {score}</h3>
     <p class="score">{score_label(score)}</p>
+    {trade_box(levels)}
     </div>
     """, unsafe_allow_html=True)
 
@@ -193,8 +232,11 @@ if section == "🔥 Trades":
         data = market_data.get(r["Ticker"])
         momentum = get_momentum(data)
         breakout = get_breakout(data)
-
         score = ai_score(r["Confidence"], momentum, breakout, weights)
+        levels = get_trade_levels(data)
+
+        if levels and levels["rr"] < 1.2:
+            continue
 
         box, label = style_box(r["Decision"])
 
@@ -204,6 +246,7 @@ if section == "🔥 Trades":
         <h2>{label}</h2>
         <p>AI Score: {score}</p>
         <p class="score">{score_label(score)}</p>
+        {trade_box(levels)}
         </div>
         """, unsafe_allow_html=True)
 
@@ -218,8 +261,8 @@ if section == "💼 Portfolio":
         data = market_data.get(row["Ticker"])
         momentum = get_momentum(data)
         breakout = get_breakout(data)
-
         score = ai_score(row["Confidence"], momentum, breakout, weights)
+        levels = get_trade_levels(data)
 
         box, label = style_box(row["Decision"])
 
@@ -229,6 +272,7 @@ if section == "💼 Portfolio":
         <h2>{label}</h2>
         <p>AI Score: {score}</p>
         <p class="score">{score_label(score)}</p>
+        {trade_box(levels)}
         </div>
         """, unsafe_allow_html=True)
 
@@ -242,11 +286,8 @@ if section == "📊 Performance":
         perf = calculate_performance(journal)
 
         if len(perf) > 0:
-            win_rate = (perf["return"] > 0).mean() * 100
-            avg_return = perf["return"].mean()
-
-            st.metric("Win Rate", f"{round(win_rate,1)}%")
-            st.metric("Avg Return", f"{round(avg_return,2)}%")
+            st.metric("Win Rate", f"{round((perf['return'] > 0).mean()*100,1)}%")
+            st.metric("Avg Return", f"{round(perf['return'].mean(),2)}%")
 
             st.line_chart(perf["return"])
 
