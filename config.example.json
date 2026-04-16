@@ -1,0 +1,5 @@
+{
+  "holdings_file_id": "YOUR_GOOGLE_DRIVE_FILE_ID",
+  "holdings_csv_url": "",
+  "dashboard_url": "https://YOUR-APP.streamlit.app"
+}
