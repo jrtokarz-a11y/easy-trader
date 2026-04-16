@@ -2,42 +2,23 @@ import streamlit as st
 import pandas as pd
 from io import StringIO
 import requests
-import os
+import yfinance as yf
 
 from analyzer import analyze_holdings, scan_trending_ideas, get_top_5_trades
 from wsb_sentiment import get_wsb_snapshot
 
-# ---------- PAGE ----------
 st.set_page_config(layout="wide")
 
-# ---------- STYLING ----------
+# ---------- STYLE ----------
 st.markdown("""
 <style>
-html, body {
-    background-color: #0b0f14;
-    color: white;
-}
-
-.card {
-    background-color: #121821;
-    padding: 15px;
-    border-radius: 15px;
-    margin-bottom: 10px;
-}
-
-.hero {
-    background-color: #161b22;
-    padding: 25px;
-    border-radius: 20px;
-    text-align: center;
-    margin-bottom: 20px;
-}
-
-.buy { color: #00d26a; font-weight: bold; }
-.sell { color: #ff5c5c; font-weight: bold; }
-.hold { color: #ffd54a; font-weight: bold; }
-
-.small { color: #aaa; font-size: 13px; }
+body {background:#0b0f14;color:white;}
+.card {background:#121821;padding:15px;border-radius:15px;margin-bottom:12px;}
+.hero {padding:25px;border-radius:20px;text-align:center;margin-bottom:20px;}
+.buy-box {background:linear-gradient(135deg,#003d1f,#00c853);}
+.sell-box {background:linear-gradient(135deg,#3d0000,#ff1744);}
+.hold-box {background:linear-gradient(135deg,#3d3000,#ffd600);}
+.small {color:#aaa;font-size:13px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -48,14 +29,30 @@ def load_holdings():
     r = requests.get(url)
     return pd.read_csv(StringIO(r.text))
 
-def color(decision):
+def style_box(decision):
     if "BUY" in decision:
-        return "buy"
+        return "buy-box", "🟢 BUY"
     if "SELL" in decision or "REDUCE" in decision:
-        return "sell"
-    return "hold"
+        return "sell-box", "🔴 SELL"
+    return "hold-box", "🟡 HOLD"
 
-# ---------- DATA ----------
+def get_candles(ticker):
+    try:
+        df = yf.download(ticker, period="3mo", progress=False)
+        return df
+    except:
+        return None
+
+def trade_checklist(conf):
+    checks = [
+        ("Trend strength", conf > 70),
+        ("Momentum confirmed", conf > 60),
+        ("Risk defined", True),
+        ("Market aligned", conf > 65)
+    ]
+    return checks
+
+# ---------- LOAD ----------
 holdings = load_holdings()
 results = analyze_holdings(holdings)
 ideas = scan_trending_ideas(holdings, get_wsb_snapshot())
@@ -63,104 +60,104 @@ top5 = get_top_5_trades(holdings, results, ideas)
 best = results["best_trade_right_now"]
 
 # ---------- SIDEBAR ----------
-st.sidebar.title("📱 Easy Trader")
+st.sidebar.title("💰 Hedge Fund Mode")
 section = st.sidebar.radio(
     "Navigate",
-    ["🏠 Home", "🔥 Top Trades", "💼 Portfolio", "📈 Opportunities", "📘 Journal"]
+    ["🏠 Home", "🎯 Focus", "🔥 Trades", "📊 Risk", "💼 Portfolio", "📘 Journal"]
 )
 
 # ---------- HOME ----------
 if section == "🏠 Home":
-
+    box, label = style_box(best["Decision"])
     st.markdown(f"""
-    <div class="hero">
+    <div class="hero {box}">
     <h1>{best["Ticker"]}</h1>
-    <h2 class="{color(best["Decision"])}">{best["Decision"]}</h2>
-    <h3>{best["Confidence"]}% Confidence</h3>
-    <p>Entry: {best["Action Price"]}</p>
-    <p>Option: {best["Suggested Strike"]}</p>
-    <p class="small">{best["Reason"]}</p>
+    <h2>{label}</h2>
+    <h3>{best["Confidence"]}%</h3>
+    <p>{best["Action Price"]}</p>
     </div>
     """, unsafe_allow_html=True)
 
-    col1, col2 = st.columns(2)
+# ---------- FOCUS ----------
+if section == "🎯 Focus":
 
-    col1.markdown(f"""
-    <div class="card">
-    <p class="small">Market Mood</p>
-    <h3>{results["summary"]["market_mood"]}</h3>
-    </div>
-    """, unsafe_allow_html=True)
+    st.markdown("## 🎯 Trade Execution")
 
-    col2.markdown(f"""
-    <div class="card">
-    <p class="small">Portfolio</p>
-    <h3>{results["summary"]["portfolio_health"]}</h3>
-    </div>
-    """, unsafe_allow_html=True)
+    if best["Confidence"] >= 70:
 
-# ---------- TOP TRADES ----------
-if section == "🔥 Top Trades":
+        box, label = style_box(best["Decision"])
 
-    st.markdown("## 🔥 Top 5 Trades Right Now")
-
-    for r in top5:
         st.markdown(f"""
-        <div class="card">
-        <h3>{r["Ticker"]}</h3>
-        <p class="{color(r["Decision"])}">{r["Decision"]} ({r["Confidence"]}%)</p>
-        <p class="small">Source: {r["Source"]}</p>
-        <p class="small">{r["Reason"]}</p>
+        <div class="hero {box}">
+        <h1>{best["Ticker"]}</h1>
+        <h2>{label}</h2>
+        <h3>{best["Confidence"]}%</h3>
         </div>
         """, unsafe_allow_html=True)
+
+        # Checklist
+        st.markdown("### ✔ Trade Checklist")
+        for name, ok in trade_checklist(best["Confidence"]):
+            st.write(f"{'✅' if ok else '❌'} {name}")
+
+        # Chart
+        data = get_candles(best["Ticker"])
+        if data is not None:
+            st.line_chart(data["Close"])
+
+    else:
+        st.info("No high-quality trade right now")
+
+# ---------- TRADES ----------
+if section == "🔥 Trades":
+
+    for r in top5:
+
+        if r["Confidence"] < 60:
+            continue
+
+        box, label = style_box(r["Decision"])
+
+        st.markdown(f"""
+        <div class="card {box}">
+        <h3>{r["Ticker"]}</h3>
+        <h2>{label}</h2>
+        <p>{r["Confidence"]}%</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ---------- RISK DASHBOARD ----------
+if section == "📊 Risk":
+
+    st.markdown("## 📊 Portfolio Risk")
+
+    total_positions = len(results["decisions"])
+    high_risk = len([r for r in results["decisions"] if r["Decision"] == "SELL / CUT RISK"])
+
+    st.metric("Total Positions", total_positions)
+    st.metric("High Risk Positions", high_risk)
+
+    st.progress(min(1.0, high_risk / max(1, total_positions)))
 
 # ---------- PORTFOLIO ----------
 if section == "💼 Portfolio":
 
-    st.markdown("## 💼 Your Positions")
+    for row in results["decisions"]:
+        box, label = style_box(row["Decision"])
 
-    with st.expander("Tap to view positions", expanded=True):
-
-        for row in results["decisions"]:
-            st.markdown(f"""
-            <div class="card">
-            <h3>{row["Ticker"]}</h3>
-            <p class="{color(row["Decision"])}">
-            {row["Decision"]} ({row["Confidence"]}%)
-            </p>
-            <p>Action: {row["Suggested Size"]}</p>
-            <p class="small">{row["Reason"]}</p>
-            </div>
-            """, unsafe_allow_html=True)
-
-# ---------- OPPORTUNITIES ----------
-if section == "📈 Opportunities":
-
-    st.markdown("## 📈 Opportunities")
-
-    with st.expander("Tap to view ideas", expanded=False):
-
-        for row in ideas:
-            st.markdown(f"""
-            <div class="card">
-            <h3>{row["Ticker"]}</h3>
-            <p class="{color(row["Decision"])}">
-            {row["Decision"]} ({row["Confidence"]}%)
-            </p>
-            <p>Strike: {row["Suggested Strike"]}</p>
-            <p class="small">{row["Simple Read"]}</p>
-            </div>
-            """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div class="card {box}">
+        <h3>{row["Ticker"]}</h3>
+        <h2>{label}</h2>
+        <p>{row["Confidence"]}%</p>
+        </div>
+        """, unsafe_allow_html=True)
 
 # ---------- JOURNAL ----------
 if section == "📘 Journal":
 
-    st.markdown("## 📘 Trade Journal")
-
-    with st.expander("Tap to view journal", expanded=False):
-
-        try:
-            journal = pd.read_csv("trade_journal.csv").tail(15)
-            st.dataframe(journal)
-        except:
-            st.info("Journal will appear after first run")
+    try:
+        journal = pd.read_csv("trade_journal.csv").tail(20)
+        st.dataframe(journal)
+    except:
+        st.info("No journal yet")
