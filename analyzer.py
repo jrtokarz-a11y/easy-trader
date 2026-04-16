@@ -130,3 +130,37 @@ def scan_trending_ideas(holdings, wsb_rows, max_results=5):
             continue
     actionable=[r for r in ideas if r['Decision']!='DO NOTHING']
     return sorted(actionable, key=lambda x:(x['Confidence'],x['Mentions']), reverse=True)[:max_results]
+def get_top_5_trades(holdings, results, ideas):
+    combined = []
+
+    # From your portfolio
+    for r in results["top_trades"]:
+        combined.append({
+            "Ticker": r["Ticker"],
+            "Decision": r["Decision"],
+            "Confidence": r["Confidence"],
+            "Source": "Portfolio",
+            "Reason": r["Reason"]
+        })
+
+    # From trending ideas (WSB + momentum)
+    for r in ideas:
+        combined.append({
+            "Ticker": r["Ticker"],
+            "Decision": r["Decision"],
+            "Confidence": r["Confidence"],
+            "Source": "WSB + Market",
+            "Reason": r["Reason"]
+        })
+
+    # Sort and dedupe
+    seen = set()
+    final = []
+    for r in sorted(combined, key=lambda x: x["Confidence"], reverse=True):
+        if r["Ticker"] not in seen:
+            final.append(r)
+            seen.add(r["Ticker"])
+        if len(final) == 5:
+            break
+
+    return final
