@@ -3,6 +3,7 @@ import pandas as pd
 from io import StringIO
 import requests
 import yfinance as yf
+import re
 
 from analyzer import analyze_holdings, scan_trending_ideas
 from wsb_sentiment import get_wsb_snapshot
@@ -82,9 +83,15 @@ h1, h2, h3, p {
 # ---------- DATA LOADERS ----------
 def load_holdings():
     file_id = st.secrets.get("holdings_file_id", "")
+
+    if not file_id:
+        st.error("Missing holdings_file_id in Streamlit secrets.")
+        st.stop()
+
     url = f"https://drive.google.com/uc?export=download&id={file_id}"
     r = requests.get(url, timeout=20)
     r.raise_for_status()
+
     return pd.read_csv(StringIO(r.text))
 
 
@@ -149,7 +156,7 @@ def trade_levels_from_data(ticker):
 
         risk = abs(entry - stop)
         reward = abs(target - entry)
-        rr = round(reward / risk, 2) if risk > 0 else 0
+        rr = round(reward / risk, 2) if risk > 0 else "—"
 
         return {
             "entry": entry,
@@ -164,25 +171,64 @@ def trade_levels_from_data(ticker):
 
 
 def fallback_levels_from_row(row):
-    action_price = row.get("Action Price", "")
-    ticker = row.get("Ticker", "—")
+    try:
+        raw_entry = str(row.get("Action Price", ""))
 
-    if not action_price:
+        # Pull first number out of strings like "Buy near $185"
+        match = re.search(r"\d+\.?\d*", raw_entry)
+
+        if not match:
+            raise ValueError("No price found")
+
+        entry = float(match.group())
+        decision = str(row.get("Decision", "HOLD"))
+        confidence = float(row.get("Confidence", 60))
+
+        # Confidence-based target/stop
+        if confidence >= 80:
+            target_pct = 0.10
+            stop_pct = 0.05
+        elif confidence >= 70:
+            target_pct = 0.08
+            stop_pct = 0.05
+        else:
+            target_pct = 0.05
+            stop_pct = 0.04
+
+        # Direction-aware
+        if "SELL" in decision or "REDUCE" in decision:
+            target = round(entry * (1 - target_pct), 2)
+            stop = round(entry * (1 + stop_pct), 2)
+        else:
+            target = round(entry * (1 + target_pct), 2)
+            stop = round(entry * (1 - stop_pct), 2)
+
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        rr = round(reward / risk, 2) if risk > 0 else "—"
+
+        return {
+            "entry": round(entry, 2),
+            "stop": stop,
+            "target": target,
+            "rr": rr,
+            "source": "Fallback confidence calc"
+        }
+
+    except Exception:
         return {
             "entry": "Check chart",
-            "stop": "Set before trade",
-            "target": "Set before trade",
+            "stop": "Set manually",
+            "target": "Set manually",
             "rr": "—",
             "source": "Fallback"
         }
 
-    return {
-        "entry": action_price,
-        "stop": row.get("Risk Line", "Set before trade"),
-        "target": "Use chart target",
-        "rr": "—",
-        "source": "Signal fallback"
-    }
+
+def format_money(value):
+    if isinstance(value, (int, float)):
+        return f"${value}"
+    return str(value)
 
 
 def level_box(levels):
@@ -191,9 +237,9 @@ def level_box(levels):
 
     return f"""
     <div class="level-box">
-        <strong>🎯 Entry:</strong> ${levels["entry"] if isinstance(levels["entry"], (int, float)) else levels["entry"]}<br>
-        <strong>🛑 Stop:</strong> ${levels["stop"] if isinstance(levels["stop"], (int, float)) else levels["stop"]}<br>
-        <strong>💰 Target:</strong> ${levels["target"] if isinstance(levels["target"], (int, float)) else levels["target"]}<br>
+        <strong>🎯 Entry:</strong> {format_money(levels["entry"])}<br>
+        <strong>🛑 Stop:</strong> {format_money(levels["stop"])}<br>
+        <strong>💰 Target:</strong> {format_money(levels["target"])}<br>
         <strong>⚖️ R/R:</strong> {levels["rr"]}<br>
         <span class="small">Source: {levels["source"]}</span>
     </div>
