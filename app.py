@@ -1,38 +1,82 @@
+import streamlit as st
+import pandas as pd
+from io import StringIO
 import requests
+import yfinance as yf
 
-def get_wsb_snapshot(limit=25):
-    try:
-        url = "https://apewisdom.io/api/v1.0/filter/all-stocks"
-        r = requests.get(url, timeout=15)
-        r.raise_for_status()
-        data = r.json()["results"]
+from analyzer import analyze_holdings, scan_trending_ideas
+from wsb_sentiment import get_wsb_snapshot
 
-        rows = []
-        for stock in data[:limit]:
-            sentiment = stock.get("sentiment", 0) or 0
+st.set_page_config(page_title="AI Trader", layout="wide")
 
-            if sentiment > 0.6:
-                simple = "Crowd very bullish"
-            elif sentiment > 0.2:
-                simple = "Crowd bullish"
-            elif sentiment < -0.2:
-                simple = "Crowd bearish"
-            else:
-                simple = "Mixed chatter"
+# ---------- STYLE ----------
+st.markdown("""
+<style>
+.block-container {
+    padding-top: 1rem;
+    max-width: 900px;
+}
 
-            rows.append({
-                "Ticker": stock.get("ticker"),
-                "Mentions": stock.get("mentions"),
-                "Sentiment": round(sentiment, 2),
-                "Simple Read": simple
-            })
+html, body, [class*="css"] {
+    background-color: #0b0f14;
+}
 
-        return rows
+.card {
+    background:#121821;
+    color:white !important;
+    padding:18px;
+    border-radius:18px;
+    margin-bottom:16px;
+}
 
-    except Exception as e:
-        return [{
-            "Ticker": "WSB unavailable",
-            "Mentions": 0,
-            "Sentiment": 0,
-            "Simple Read": str(e)
-        }]
+.hero {
+    color:white !important;
+    padding:24px;
+    border-radius:24px;
+    margin-bottom:18px;
+}
+
+.hero h1, .hero h2, .hero h3, .hero p,
+.card h1, .card h2, .card h3, .card p {
+    color:white !important;
+}
+
+.buy-box {
+    background:linear-gradient(135deg,#004d25,#00c853);
+}
+
+.sell-box {
+    background:linear-gradient(135deg,#5c0000,#ff1744);
+}
+
+.hold-box {
+    background:linear-gradient(135deg,#5c4b00,#ffd600);
+}
+
+.small {
+    color:#e0e0e0 !important;
+    font-size:14px;
+}
+
+.level-box {
+    background:#0f172a;
+    color:white !important;
+    padding:12px;
+    border-radius:12px;
+    margin-top:10px;
+}
+
+.level-box p {
+    color:white !important;
+}
+
+h1, h2, h3, p {
+    color:white;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+# ---------- DATA LOADERS ----------
+def load_holdings():
+    file_id = st.se
