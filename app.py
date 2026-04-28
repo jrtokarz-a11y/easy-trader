@@ -63,10 +63,12 @@ html, body, [class*="css"] {
     color:white !important;
     padding:12px;
     border-radius:12px;
-    margin-top:10px;
+    margin-top:12px;
+    line-height:1.7;
+    font-size:15px;
 }
 
-.level-box p {
+.level-box strong {
     color:white !important;
 }
 
@@ -86,6 +88,26 @@ def load_holdings():
     return pd.read_csv(StringIO(r.text))
 
 
+@st.cache_data(ttl=120)
+def get_price_data(ticker):
+    try:
+        df = yf.download(
+            ticker,
+            period="3mo",
+            interval="1d",
+            auto_adjust=True,
+            progress=False
+        )
+
+        if df is None or df.empty:
+            return None
+
+        return df.dropna()
+
+    except Exception:
+        return None
+
+
 # ---------- UI HELPERS ----------
 def style_box(decision):
     d = str(decision)
@@ -100,37 +122,21 @@ def style_box(decision):
 
 
 def safe_chart(ticker):
+    df = get_price_data(ticker)
+
+    if df is not None and "Close" in df.columns and not df["Close"].dropna().empty:
+        st.line_chart(df["Close"].dropna())
+    else:
+        st.caption(f"No chart data for {ticker}")
+
+
+def trade_levels_from_data(ticker):
+    df = get_price_data(ticker)
+
+    if df is None or len(df) < 20:
+        return None
+
     try:
-        df = yf.download(
-            ticker,
-            period="3mo",
-            interval="1d",
-            auto_adjust=True,
-            progress=False
-        )
-
-        if df is not None and not df.empty and "Close" in df.columns:
-            st.line_chart(df["Close"].dropna())
-        else:
-            st.caption(f"No chart data for {ticker}")
-
-    except Exception as e:
-        st.caption(f"Chart unavailable for {ticker}: {e}")
-
-
-def trade_levels(ticker):
-    try:
-        df = yf.download(
-            ticker,
-            period="3mo",
-            interval="1d",
-            auto_adjust=True,
-            progress=False
-        )
-
-        if df is None or df.empty or len(df) < 20:
-            return None
-
         recent = df.tail(20)
 
         current = float(recent["Close"].iloc[-1])
@@ -145,10 +151,53 @@ def trade_levels(ticker):
         reward = abs(target - entry)
         rr = round(reward / risk, 2) if risk > 0 else 0
 
-        return entry, stop, target, rr
+        return {
+            "entry": entry,
+            "stop": stop,
+            "target": target,
+            "rr": rr,
+            "source": "Yahoo Finance"
+        }
 
     except Exception:
         return None
+
+
+def fallback_levels_from_row(row):
+    action_price = row.get("Action Price", "")
+    ticker = row.get("Ticker", "—")
+
+    if not action_price:
+        return {
+            "entry": "Check chart",
+            "stop": "Set before trade",
+            "target": "Set before trade",
+            "rr": "—",
+            "source": "Fallback"
+        }
+
+    return {
+        "entry": action_price,
+        "stop": row.get("Risk Line", "Set before trade"),
+        "target": "Use chart target",
+        "rr": "—",
+        "source": "Signal fallback"
+    }
+
+
+def level_box(levels):
+    if not levels:
+        return ""
+
+    return f"""
+    <div class="level-box">
+        <strong>🎯 Entry:</strong> ${levels["entry"] if isinstance(levels["entry"], (int, float)) else levels["entry"]}<br>
+        <strong>🛑 Stop:</strong> ${levels["stop"] if isinstance(levels["stop"], (int, float)) else levels["stop"]}<br>
+        <strong>💰 Target:</strong> ${levels["target"] if isinstance(levels["target"], (int, float)) else levels["target"]}<br>
+        <strong>⚖️ R/R:</strong> {levels["rr"]}<br>
+        <span class="small">Source: {levels["source"]}</span>
+    </div>
+    """
 
 
 def render_card(row):
@@ -158,21 +207,10 @@ def render_card(row):
     reason = row.get("Reason", row.get("Simple Read", ""))
 
     box, label = style_box(decision)
-    levels = trade_levels(ticker)
 
-    level_html = ""
-
-    if levels:
-        entry, stop, target, rr = levels
-
-        level_html = f"""
-        <div class="level-box">
-            🎯 Entry: ${entry}<br>
-            🛑 Stop: ${stop}<br>
-            💰 Target: ${target}<br>
-            ⚖️ R/R: {rr}
-        </div>
-        """
+    levels = trade_levels_from_data(ticker)
+    if levels is None:
+        levels = fallback_levels_from_row(row)
 
     st.markdown(f"""
     <div class="hero {box}">
@@ -180,7 +218,7 @@ def render_card(row):
       <h2>{label}</h2>
       <h3>Confidence: {confidence}%</h3>
       <p class="small">{reason}</p>
-      {level_html}
+      {level_box(levels)}
     </div>
     """, unsafe_allow_html=True)
 
